@@ -170,23 +170,25 @@ bot.onText(/\/p (.+)/, async (msg, match) => {
     const loadingMsg = await bot.sendMessage(chatId, '⏳ Fetching data...');
     const data = await getCoinDetails(coin);
     
-    await bot.deleteMessage(chatId, loadingMsg.message_id);
-
     const changeEmoji = data.priceChangePercent >= 0 ? '📈' : '📉';
     const changeColor = data.priceChangePercent >= 0 ? '🟢' : '🔴';
-
+    
     const message = `
 ${changeColor} *${data.symbol}*
 
 💰 *Price:* $${formatNumber(data.price, 4)}
 ${changeEmoji} *24h Change:* ${data.priceChangePercent >= 0 ? '+' : ''}${formatNumber(data.priceChangePercent)}%
+
 📊 *24h High:* $${formatNumber(data.highPrice, 4)}
 📉 *24h Low:* $${formatNumber(data.lowPrice, 4)}
+
 📦 *24h Volume:* ${formatVolume(data.volume)} ${coin}
 💵 *24h Vol (USDT):* $${formatVolume(data.quoteVolume)}
     `.trim();
 
-    bot.sendMessage(chatId, message, {
+    bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: loadingMsg.message_id,
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
@@ -211,17 +213,19 @@ bot.onText(/\/trade (.+)/, async (msg, match) => {
   await showTradeOptions(chatId, coin);
 });
 
-// Show trade options
-async function showTradeOptions(chatId, symbol) {
+// Show trade options - MODIFIED to edit message when called from callback
+async function showTradeOptions(chatId, symbol, messageId = null) {
   try {
-    const loadingMsg = await bot.sendMessage(chatId, '⏳ Loading trade options...');
+    if (!messageId) {
+      const loadingMsg = await bot.sendMessage(chatId, '⏳ Loading trade options...');
+      messageId = loadingMsg.message_id;
+    }
+
     const data = await getCoinDetails(symbol);
     
-    await bot.deleteMessage(chatId, loadingMsg.message_id);
-
     const changeEmoji = data.priceChangePercent >= 0 ? '📈' : '📉';
     const changeColor = data.priceChangePercent >= 0 ? '🟢' : '🔴';
-
+    
     const message = `
 ${changeColor} *${data.symbol}* - TRADE
 
@@ -235,7 +239,9 @@ ${changeEmoji} *24h Change:* ${data.priceChangePercent >= 0 ? '+' : ''}${formatN
 Select your position type:
     `.trim();
 
-    bot.sendMessage(chatId, message, {
+    bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: messageId,
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
@@ -275,7 +281,7 @@ bot.on('callback_query', async (query) => {
 
     if (data.startsWith('trade_')) {
       const symbol = data.replace('trade_', '');
-      await showTradeOptions(chatId, symbol);
+      await showTradeOptions(chatId, symbol, messageId);
       return;
     }
 
@@ -293,7 +299,11 @@ bot.on('callback_query', async (query) => {
       if (amount === 'custom') {
         state.step = 'custom_amount';
         userStates.set(chatId, state);
-        bot.sendMessage(chatId, '💵 Enter custom amount in USD:');
+        bot.editMessageText('💵 Enter custom amount in USD:', {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: 'Markdown'
+        });
         return;
       } else if (amount === 'max') {
         const user = initUser(chatId);
@@ -315,7 +325,11 @@ bot.on('callback_query', async (query) => {
       if (leverage === 'custom') {
         state.step = 'custom_leverage';
         userStates.set(chatId, state);
-        bot.sendMessage(chatId, `⚡ Enter custom leverage (1-${MAX_LEVERAGE}):`);
+        bot.editMessageText(`⚡ Enter custom leverage (1-${MAX_LEVERAGE}):`, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: 'Markdown'
+        });
         return;
       } else {
         state.leverage = parseInt(leverage);
@@ -326,7 +340,7 @@ bot.on('callback_query', async (query) => {
 
     if (data === 'confirm_trade') {
       const state = userStates.get(chatId);
-      await executeTrade(chatId, state);
+      await executeTrade(chatId, state, messageId);
       userStates.delete(chatId);
       return;
     }
@@ -343,69 +357,75 @@ bot.on('callback_query', async (query) => {
 
     switch (data) {
       case 'positions':
-        await showPositions(chatId);
+        await showPositions(chatId, messageId, true);
         break;
       case 'refresh_positions':
         await showPositions(chatId, messageId, true);
         break;
       case 'balance':
-        await showBalance(chatId);
+        await showBalance(chatId, messageId, true);
         break;
       case 'refresh_balance':
         await showBalance(chatId, messageId, true);
         break;
       case 'analysis':
-        await showAnalysis(chatId);
+        await showAnalysis(chatId, messageId, true);
         break;
       case 'refresh_analysis':
         await showAnalysis(chatId, messageId, true);
         break;
       case 'history':
-        await showHistory(chatId);
+        await showHistory(chatId, messageId);
         break;
       case 'leaderboard':
-        await showLeaderboard(chatId);
+        await showLeaderboard(chatId, messageId);
         break;
       case 'settings':
-        await showSettings(chatId);
+        await showSettings(chatId, messageId);
         break;
       case 'help':
-        await showHelp(chatId);
+        await showHelp(chatId, messageId);
         break;
       case 'closeall':
-        await closeAllPositions(chatId);
+        await closeAllPositions(chatId, messageId);
         break;
       case 'reset_confirm':
         users.delete(chatId);
         initUser(chatId);
         userStates.delete(chatId);
-        bot.sendMessage(chatId, 
+        bot.editMessageText(
           '🔄 *Account Reset!*\n\n' +
           `Your balance has been reset to $${INITIAL_BALANCE}.\n` +
           'All positions and history cleared.',
           { 
+            chat_id: chatId,
+            message_id: messageId,
             parse_mode: 'Markdown',
             reply_markup: getMainMenu()
           }
         );
         break;
       case 'add_position':
-        bot.sendMessage(chatId, 
+        bot.editMessageText(
           '🎯 *Open New Position*\n\n' +
           'Use /trade <COIN> to open a new position!\n\n' +
           'Example: /trade BTC',
           { 
+            chat_id: chatId,
+            message_id: messageId,
             parse_mode: 'Markdown',
             reply_markup: getMainMenu() 
           }
         );
         break;
       case 'set_tpsl':
-        bot.sendMessage(chatId, 
+        bot.editMessageText(
           '📊 *Take Profit / Stop Loss*\n\n' +
           '🚧 Feature coming soon!\n\n' +
           'You\'ll be able to set automatic TP/SL levels.',
           { 
+            chat_id: chatId,
+            message_id: messageId,
             parse_mode: 'Markdown',
             reply_markup: getMainMenu() 
           }
@@ -414,7 +434,7 @@ bot.on('callback_query', async (query) => {
       default:
         if (data.startsWith('close_')) {
           const positionId = parseInt(data.replace('close_', ''));
-          await closePosition(chatId, positionId);
+          await closePosition(chatId, positionId, messageId);
         }
         break;
     }
@@ -569,7 +589,6 @@ ${color} *CONFIRM ${state.action.toUpperCase()} POSITION*
 ⚠️ *Liquidation:* $${formatNumber(liquidationPrice, 4)}
 
 ━━━━━━━━━━━━━━━━━━━━━
-
 *Potential PnL (1% move):*
 Profit: +$${formatNumber(positionSize * 0.01)} 💚
 Loss: -$${formatNumber(positionSize * 0.01)} ❤️
@@ -595,22 +614,30 @@ Confirm this trade?
   }
 }
 
-// Execute trade
-async function executeTrade(chatId, state) {
+// Execute trade - MODIFIED to edit confirmation message
+async function executeTrade(chatId, state, messageId = null) {
   try {
     const user = initUser(chatId);
     const data = await getCoinDetails(state.symbol);
+    
     const margin = state.amount;
     const leverage = state.leverage;
     const positionSize = margin * leverage;
 
     if (margin > user.balance) {
-      bot.sendMessage(chatId, 
-        `❌ Insufficient balance!\n\n` +
+      const errorMsg = `❌ Insufficient balance!\n\n` +
         `Required: $${formatNumber(margin)}\n` +
-        `Available: $${formatNumber(user.balance)}`,
-        { reply_markup: getMainMenu() }
-      );
+        `Available: $${formatNumber(user.balance)}`;
+      
+      if (messageId) {
+        bot.editMessageText(errorMsg, {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: getMainMenu()
+        });
+      } else {
+        bot.sendMessage(chatId, errorMsg, { reply_markup: getMainMenu() });
+      }
       return;
     }
 
@@ -633,7 +660,7 @@ async function executeTrade(chatId, state) {
 
     const emoji = state.action === 'long' ? '🟢' : '🔴';
     const arrow = state.action === 'long' ? '📈' : '📉';
-
+    
     const message = `
 ${emoji} *${state.action.toUpperCase()} POSITION OPENED*
 
@@ -649,10 +676,19 @@ ${arrow} *Amount:* ${formatNumber(position.amount, 6)}
 🆔 *Position ID:* ${position.id}
     `.trim();
 
-    bot.sendMessage(chatId, message, { 
-      parse_mode: 'Markdown',
-      reply_markup: getMainMenu()
-    });
+    if (messageId) {
+      bot.editMessageText(message, { 
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: getMainMenu()
+      });
+    } else {
+      bot.sendMessage(chatId, message, { 
+        parse_mode: 'Markdown',
+        reply_markup: getMainMenu()
+      });
+    }
   } catch (error) {
     bot.sendMessage(chatId, `❌ Error: ${error.message}`, {
       reply_markup: getMainMenu()
@@ -660,13 +696,13 @@ ${arrow} *Amount:* ${formatNumber(position.amount, 6)}
   }
 }
 
-// Show positions
-async function showPositions(chatId, messageId, isRefresh) {
+// Show positions - MODIFIED to always use edit when messageId provided
+async function showPositions(chatId, messageId = null, isEdit = false) {
   const user = initUser(chatId);
-
+  
   if (user.positions.length === 0) {
     const msg = '📭 No open positions.\n\nUse /trade <COIN> to open a position!';
-    if (messageId && isRefresh) {
+    if (messageId && isEdit) {
       try {
         bot.editMessageText(msg, {
           chat_id: chatId,
@@ -694,6 +730,7 @@ async function showPositions(chatId, messageId, isRefresh) {
     try {
       const data = await getCoinDetails(position.symbol);
       const { pnl, roi } = calculatePnL(position, data.price);
+      
       totalPnL += pnl;
       totalInvested += position.margin;
 
@@ -703,8 +740,9 @@ async function showPositions(chatId, messageId, isRefresh) {
       const distanceToLiq = position.type === 'LONG' 
         ? ((data.price - position.liquidationPrice) / data.price * 100)
         : ((position.liquidationPrice - data.price) / data.price * 100);
+      
       const liqWarning = distanceToLiq < 5 ? '⚠️ ' : '';
-
+      
       const timeInPosition = Math.floor((Date.now() - position.openTime) / 1000 / 60);
       const timeStr = timeInPosition < 60 ? `${timeInPosition}m` : `${Math.floor(timeInPosition / 60)}h ${timeInPosition % 60}m`;
 
@@ -725,6 +763,7 @@ async function showPositions(chatId, messageId, isRefresh) {
 
   const totalEmoji = totalPnL >= 0 ? '💚' : '❤️';
   const totalRoi = totalInvested > 0 ? (totalPnL / totalInvested * 100) : 0;
+  
   message += `━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `${totalEmoji} *Total PnL: $${formatNumber(totalPnL)} (${formatNumber(totalRoi)}%)*\n`;
   message += `📊 Positions: ${user.positions.length} | 💰 Invested: $${formatNumber(totalInvested)}`;
@@ -743,676 +782,4 @@ async function showPositions(chatId, messageId, isRefresh) {
     { text: '📊 Set TP/SL', callback_data: 'set_tpsl' },
     { text: '📈 Add Position', callback_data: 'add_position' }
   ]);
-  buttons.push([{ text: '🔙 Back to Menu', callback_data: 'menu' }]);
-
-  if (messageId && isRefresh) {
-    try {
-      bot.editMessageText(message, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: buttons }
-      });
-    } catch (error) {
-      if (error && error.message && !error.message.includes('message is not modified')) {
-        console.error('Error editing message:', error.message);
-      }
-    }
-  } else {
-    bot.sendMessage(chatId, message, { 
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: buttons }
-    });
-  }
-}
-
-// Show balance
-async function showBalance(chatId, messageId, isRefresh) {
-  const user = initUser(chatId);
-
-  const totalMargin = user.positions.reduce((sum, p) => sum + p.margin, 0);
-  const availableBalance = user.balance - totalMargin;
-  const winRate = user.stats.totalTrades > 0 
-    ? (user.stats.winningTrades / user.stats.totalTrades * 100).toFixed(2)
-    : 0;
-  const netPnL = user.stats.totalProfit + user.stats.totalLoss;
-  const roi = ((netPnL / INITIAL_BALANCE) * 100).toFixed(2);
-
-  let unrealizedPnL = 0;
-  for (const position of user.positions) {
-    try {
-      const data = await getCoinDetails(position.symbol);
-      const { pnl } = calculatePnL(position, data.price);
-      unrealizedPnL += pnl;
-    } catch (error) {
-      console.error('Error calculating unrealized PnL:', error.message);
-    }
-  }
-
-  const totalEquity = user.balance + unrealizedPnL;
-  const now = new Date();
-
-  const message = `
-💼 *PORTFOLIO SUMMARY*
-🕐 Updated: ${now.toLocaleTimeString()}
-
-💰 *Total Equity:* ${formatNumber(totalEquity)}
-💵 *Available:* ${formatNumber(availableBalance)}
-🔒 *In Positions:* ${formatNumber(totalMargin)}
-${unrealizedPnL >= 0 ? '📈' : '📉'} *Unrealized PnL:* ${formatNumber(unrealizedPnL)}
-
-━━━━━━━━━━━━━━━━━━━━━
-
-📊 *TRADING STATISTICS*
-
-${netPnL >= 0 ? '📈' : '📉'} *Net PnL:* ${formatNumber(netPnL)} (${roi >= 0 ? '+' : ''}${roi}%)
-📈 *Total Trades:* ${user.stats.totalTrades}
-✅ *Winning:* ${user.stats.winningTrades}
-❌ *Losing:* ${user.stats.losingTrades}
-🎯 *Win Rate:* ${winRate}%
-
-💚 *Total Profit:* ${formatNumber(user.stats.totalProfit)}
-❤️ *Total Loss:* ${formatNumber(Math.abs(user.stats.totalLoss))}
-🏆 *Best Trade:* ${formatNumber(user.stats.bestTrade)}
-💔 *Worst Trade:* ${formatNumber(user.stats.worstTrade)}
-
-🔢 *Open Positions:* ${user.positions.length}
-  `.trim();
-
-  const buttons = [
-    [
-      { text: '🔄 Refresh', callback_data: 'refresh_balance' },
-      { text: '📊 Analysis', callback_data: 'analysis' }
-    ],
-    [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
-  ];
-
-  if (messageId && isRefresh) {
-    try {
-      bot.editMessageText(message, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: buttons }
-      });
-    } catch (error) {
-      if (error && error.message && !error.message.includes('message is not modified')) {
-        console.error('Error editing message:', error.message);
-      }
-    }
-  } else {
-    bot.sendMessage(chatId, message, { 
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: buttons }
-    });
-  }
-}
-
-// Get performance rating
-function getPerformanceRating(winRate, profitFactor, roi) {
-  let rating = '';
-
-  if (winRate >= 60 && profitFactor >= 2 && parseFloat(roi) > 50) {
-    rating = '🌟🌟🌟🌟🌟 Exceptional!';
-  } else if (winRate >= 55 && profitFactor >= 1.5 && parseFloat(roi) > 30) {
-    rating = '⭐⭐⭐⭐ Excellent!';
-  } else if (winRate >= 50 && profitFactor >= 1.2 && parseFloat(roi) > 10) {
-    rating = '⭐⭐⭐ Good!';
-  } else if (winRate >= 45 && profitFactor >= 1 && parseFloat(roi) > 0) {
-    rating = '⭐⭐ Developing';
-  } else {
-    rating = '⭐ Keep Learning';
-  }
-
-  return rating;
-}
-
-// Show analysis
-async function showAnalysis(chatId, messageId, isRefresh) {
-  const user = initUser(chatId);
-
-  if (user.trades.length === 0) {
-    const msg = '📊 No trading data yet to analyze.\n\nStart trading to see your performance!';
-    if (messageId && isRefresh) {
-      try {
-        bot.editMessageText(msg, {
-          chat_id: chatId,
-          message_id: messageId,
-          reply_markup: getMainMenu()
-        });
-      } catch (error) {
-        console.error('Error editing message:', error.message);
-      }
-    } else {
-      bot.sendMessage(chatId, msg, {
-        reply_markup: getMainMenu()
-      });
-    }
-    return;
-  }
-
-  const totalTrades = user.stats.totalTrades;
-  const winRate = (user.stats.winningTrades / totalTrades * 100).toFixed(2);
-  const avgProfit = user.stats.winningTrades > 0 ? (user.stats.totalProfit / user.stats.winningTrades) : 0;
-  const avgLoss = user.stats.losingTrades > 0 ? (user.stats.totalLoss / user.stats.losingTrades) : 0;
-  const profitFactor = user.stats.totalLoss !== 0 ? Math.abs(user.stats.totalProfit / user.stats.totalLoss) : 0;
-  const netPnL = user.stats.totalProfit + user.stats.totalLoss;
-  const roi = ((netPnL / INITIAL_BALANCE) * 100).toFixed(2);
-
-  let unrealizedPnL = 0;
-  for (const position of user.positions) {
-    try {
-      const data = await getCoinDetails(position.symbol);
-      const { pnl } = calculatePnL(position, data.price);
-      unrealizedPnL += pnl;
-    } catch (error) {
-      console.error('Error calculating unrealized PnL:', error.message);
-    }
-  }
-
-  const totalEquity = user.balance + unrealizedPnL;
-
-  let currentStreak = 0;
-  let maxWinStreak = 0;
-  let maxLossStreak = 0;
-  let tempWinStreak = 0;
-  let tempLossStreak = 0;
-
-  for (const trade of user.trades.slice().reverse()) {
-    if (trade.pnl >= 0) {
-      tempWinStreak++;
-      tempLossStreak = 0;
-      if (tempWinStreak > maxWinStreak) maxWinStreak = tempWinStreak;
-    } else {
-      tempLossStreak++;
-      tempWinStreak = 0;
-      if (tempLossStreak > maxLossStreak) maxLossStreak = tempLossStreak;
-    }
-  }
-
-  const lastTrade = user.trades[user.trades.length - 1];
-  currentStreak = lastTrade.pnl >= 0 ? tempWinStreak : -tempLossStreak;
-
-  const avgRR = avgLoss !== 0 ? (avgProfit / Math.abs(avgLoss)) : 0;
-
-  let peak = INITIAL_BALANCE;
-  let maxDrawdown = 0;
-  let currentBalance = INITIAL_BALANCE;
-
-  for (const trade of user.trades) {
-    currentBalance += trade.pnl;
-    if (currentBalance > peak) {
-      peak = currentBalance;
-    }
-    const drawdown = ((peak - currentBalance) / peak) * 100;
-    if (drawdown > maxDrawdown) {
-      maxDrawdown = drawdown;
-    }
-  }
-
-  const now = new Date();
-
-  const message = `
-📈 *TRADING ANALYSIS*
-🕐 Updated: ${now.toLocaleTimeString()}
-
-💼 *Account Performance*
-Starting Balance: ${INITIAL_BALANCE}
-Current Equity: ${formatNumber(totalEquity)}
-Realized PnL: ${formatNumber(netPnL)}
-Unrealized PnL: ${formatNumber(unrealizedPnL)}
-Total ROI: ${roi >= 0 ? '+' : ''}${roi}%
-Max Drawdown: ${formatNumber(maxDrawdown)}%
-
-━━━━━━━━━━━━━━━━━━━━━
-
-📊 *Trading Metrics*
-
-🎯 Win Rate: ${winRate}%
-📈 Total Trades: ${totalTrades}
-✅ Winning Trades: ${user.stats.winningTrades}
-❌ Losing Trades: ${user.stats.losingTrades}
-
-💰 Profit Factor: ${formatNumber(profitFactor)}
-💚 Avg Profit: ${formatNumber(avgProfit)}
-❤️ Avg Loss: ${formatNumber(avgLoss)}
-⚖️ Risk/Reward: ${formatNumber(avgRR)}
-
-🏆 Best Trade: ${formatNumber(user.stats.bestTrade)}
-💔 Worst Trade: ${formatNumber(user.stats.worstTrade)}
-
-━━━━━━━━━━━━━━━━━━━━━
-
-🔥 *Streaks*
-
-Current: ${currentStreak >= 0 ? '🟢' : '🔴'} ${Math.abs(currentStreak)} ${currentStreak >= 0 ? 'wins' : 'losses'}
-Best Win Streak: ${maxWinStreak}
-Worst Loss Streak: ${maxLossStreak}
-
-━━━━━━━━━━━━━━━━━━━━━
-
-💡 *Performance Rating*
-${getPerformanceRating(winRate, profitFactor, roi)}
-  `.trim();
-
-  const buttons = [
-    [
-      { text: '🔄 Refresh', callback_data: 'refresh_analysis' },
-      { text: '📊 Positions', callback_data: 'positions' }
-    ],
-    [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
-  ];
-
-  if (messageId && isRefresh) {
-    try {
-      bot.editMessageText(message, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: buttons }
-      });
-    } catch (error) {
-      if (error && error.message && !error.message.includes('message is not modified')) {
-        console.error('Error editing message:', error.message);
-      }
-    }
-  } else {
-    bot.sendMessage(chatId, message, { 
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: buttons }
-    });
-  }
-}
-
-// Show history
-async function showHistory(chatId) {
-  const user = initUser(chatId);
-
-  if (user.trades.length === 0) {
-    bot.sendMessage(chatId, '📭 No trade history yet.\n\nStart trading with /trade <COIN>!', {
-      reply_markup: getMainMenu()
-    });
-    return;
-  }
-
-  const recentTrades = user.trades.slice(-10).reverse();
-  let message = '📜 *TRADE HISTORY* (Last 10)\n\n';
-
-  recentTrades.forEach((trade) => {
-    const emoji = trade.pnl >= 0 ? '✅' : '❌';
-    const typeEmoji = trade.type === 'LONG' ? '🟢' : '🔴';
-    
-    message += `${emoji} ${typeEmoji} *${trade.symbol} ${trade.leverage}x*\n`;
-    message += `   Entry: ${formatNumber(trade.entryPrice, 4)} → Exit: ${formatNumber(trade.exitPrice, 4)}\n`;
-    message += `   PnL: ${formatNumber(trade.pnl)} (${formatNumber(trade.roi)}%)\n`;
-    message += `   ${trade.status}\n\n`;
-  });
-
-  bot.sendMessage(chatId, message, { 
-    parse_mode: 'Markdown',
-    reply_markup: getMainMenu()
-  });
-}
-
-// Show leaderboard
-async function showLeaderboard(chatId) {
-  const leaderboardData = [];
-  
-  for (const [userId, userData] of users.entries()) {
-    const netPnL = userData.stats.totalProfit + userData.stats.totalLoss;
-    const roi = ((netPnL / INITIAL_BALANCE) * 100).toFixed(2);
-    const winRate = userData.stats.totalTrades > 0 
-      ? (userData.stats.winningTrades / userData.stats.totalTrades * 100).toFixed(2)
-      : 0;
-    
-    leaderboardData.push({
-      userId,
-      balance: userData.balance,
-      netPnL,
-      roi,
-      winRate,
-      totalTrades: userData.stats.totalTrades
-    });
-  }
-
-  leaderboardData.sort((a, b) => b.netPnL - a.netPnL);
-
-  let message = '🏆 *LEADERBOARD - Top Traders*\n\n';
-
-  if (leaderboardData.length === 0) {
-    message += 'No traders yet. Be the first! 🚀';
-  } else {
-    leaderboardData.slice(0, 10).forEach((trader, index) => {
-      const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-      const isCurrentUser = trader.userId === chatId;
-      const highlight = isCurrentUser ? '👉 ' : '';
-      
-      message += `${highlight}${medal} User ${trader.userId.toString().slice(-4)}\n`;
-      message += `   💰 Balance: ${formatNumber(trader.balance)}\n`;
-      message += `   📈 PnL: ${formatNumber(trader.netPnL)} (${trader.roi >= 0 ? '+' : ''}${trader.roi}%)\n`;
-      message += `   🎯 Win Rate: ${trader.winRate}%\n`;
-      message += `   📊 Trades: ${trader.totalTrades}\n\n`;
-    });
-
-    const userRank = leaderboardData.findIndex(t => t.userId === chatId);
-    if (userRank >= 10) {
-      const userData = leaderboardData[userRank];
-      message += `━━━━━━━━━━━━━━━━━━━━━\n`;
-      message += `👉 Your Rank: #${userRank + 1}\n`;
-      message += `   💰 Balance: ${formatNumber(userData.balance)}\n`;
-      message += `   📈 PnL: ${formatNumber(userData.netPnL)} (${userData.roi >= 0 ? '+' : ''}${userData.roi}%)\n`;
-    }
-  }
-
-  bot.sendMessage(chatId, message, { 
-    parse_mode: 'Markdown',
-    reply_markup: getMainMenu()
-  });
-}
-
-// Show settings
-async function showSettings(chatId) {
-  const message = `
-⚙️ *SETTINGS*
-
-Manage your trading account and preferences.
-  `.trim();
-
-  bot.sendMessage(chatId, message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '🔄 Reset Account', callback_data: 'reset_confirm' }
-        ],
-        [
-          { text: '🔙 Back to Menu', callback_data: 'menu' }
-        ]
-      ]
-    }
-  });
-}
-
-// Show help
-async function showHelp(chatId) {
-  const message = `
-❓ *HELP & COMMANDS*
-
-*🔍 Quick Commands:*
-/p <COIN> - View coin details & trade
-/trade <COIN> - Open trade directly
-/menu - Show main menu
-
-*💡 Examples:*
-/p BTC
-/trade ETH
-/p SOL
-
-*📊 Menu Options:*
-• *Positions* - View & manage open positions
-• *Balance* - View portfolio & stats
-• *Analysis* - Detailed performance metrics
-• *History* - View past trades
-• *Leaderboard* - Top traders ranking
-• *Settings* - Account management
-
-*🎯 How to Trade:*
-1. Use /p <COIN> or /trade <COIN>
-2. Select LONG or SHORT
-3. Choose your margin amount
-4. Select leverage (1-${MAX_LEVERAGE}x)
-5. Confirm and trade!
-
-*⚠️ Risk Management:*
-• Higher leverage = Higher risk
-• Always monitor liquidation price
-• Start with lower leverage
-• Practice risk management
-
-*💡 Tips:*
-• Check 24h change before trading
-• Set realistic profit targets
-• Don't risk more than you can afford
-• Use the analysis tool to improve
-
-Need more help? Contact support! 📧
-  `.trim();
-
-  bot.sendMessage(chatId, message, { 
-    parse_mode: 'Markdown',
-    reply_markup: getMainMenu()
-  });
-}
-
-// Close position
-async function closePosition(chatId, positionId) {
-  const user = initUser(chatId);
-  const position = user.positions.find(p => p.id === positionId);
-
-  if (!position) {
-    bot.sendMessage(chatId, '❌ Position not found or already closed.', {
-      reply_markup: getMainMenu()
-    });
-    return;
-  }
-
-  try {
-    const loadingMsg = await bot.sendMessage(chatId, '⏳ Closing position...');
-    
-    const data = await getCoinDetails(position.symbol);
-    const { pnl, roi } = calculatePnL(position, data.price);
-
-    user.balance += position.margin + pnl;
-
-    user.stats.totalTrades++;
-    if (pnl >= 0) {
-      user.stats.winningTrades++;
-      user.stats.totalProfit += pnl;
-      if (pnl > user.stats.bestTrade) {
-        user.stats.bestTrade = pnl;
-      }
-    } else {
-      user.stats.losingTrades++;
-      user.stats.totalLoss += pnl;
-      if (pnl < user.stats.worstTrade) {
-        user.stats.worstTrade = pnl;
-      }
-    }
-
-    const trade = {
-      ...position,
-      exitPrice: data.price,
-      closeTime: Date.now(),
-      pnl: pnl,
-      roi: roi,
-      status: 'CLOSED'
-    };
-    user.trades.push(trade);
-
-    const index = user.positions.indexOf(position);
-    user.positions.splice(index, 1);
-
-    await bot.deleteMessage(chatId, loadingMsg.message_id);
-
-    const isProfit = pnl >= 0;
-    const border = isProfit ? '🟢' : '🔴';
-    const result = isProfit ? '✅ PROFIT' : '❌ LOSS';
-    const sign = pnl >= 0 ? '+' : '';
-    const duration = Math.floor((trade.closeTime - trade.openTime) / 1000 / 60);
-
-    const summary = `
-${border.repeat(20)}
-
-${result}
-${sign}${formatNumber(Math.abs(pnl))} (${sign}${formatNumber(roi)}%)
-
-${border.repeat(20)}
-
-📊 TRADE DETAILS
-
-🪙 Symbol: ${trade.symbol}
-${trade.type === 'LONG' ? '📈' : '📉'} Type: ${trade.type}
-⚡ Leverage: ${trade.leverage}x
-
-💰 Entry Price: ${formatNumber(trade.entryPrice, 4)}
-🎯 Exit Price: ${formatNumber(trade.exitPrice, 4)}
-📊 Price Change: ${formatNumber(((trade.exitPrice - trade.entryPrice) / trade.entryPrice) * 100)}%
-
-💵 Position Size: ${formatNumber(trade.amount, 6)}
-🔒 Margin Used: ${formatNumber(trade.margin)}
-
-⏱ Duration: ${duration} minutes
-
-${border.repeat(20)}
-    `.trim();
-
-    await bot.sendMessage(chatId, 
-      `\`\`\`\n${summary}\n\`\`\`\n` +
-      `💼 *New Balance:* ${formatNumber(user.balance)}\n` +
-      `📊 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%`,
-      { 
-        parse_mode: 'Markdown',
-        reply_markup: getMainMenu()
-      }
-    );
-
-  } catch (error) {
-    bot.sendMessage(chatId, `❌ Error: ${error.message}`, {
-      reply_markup: getMainMenu()
-    });
-  }
-}
-
-// Close all positions
-async function closeAllPositions(chatId) {
-  const user = initUser(chatId);
-
-  if (user.positions.length === 0) {
-    bot.sendMessage(chatId, '📭 No open positions to close.', {
-      reply_markup: getMainMenu()
-    });
-    return;
-  }
-
-  const loadingMsg = await bot.sendMessage(chatId, '⏳ Closing all positions...');
-  
-  let totalPnL = 0;
-  const closedCount = user.positions.length;
-
-  for (const position of [...user.positions]) {
-    try {
-      const data = await getCoinDetails(position.symbol);
-      const { pnl, roi } = calculatePnL(position, data.price);
-
-      totalPnL += pnl;
-      user.balance += position.margin + pnl;
-
-      user.stats.totalTrades++;
-      if (pnl >= 0) {
-        user.stats.winningTrades++;
-        user.stats.totalProfit += pnl;
-        if (pnl > user.stats.bestTrade) {
-          user.stats.bestTrade = pnl;
-        }
-      } else {
-        user.stats.losingTrades++;
-        user.stats.totalLoss += pnl;
-        if (pnl < user.stats.worstTrade) {
-          user.stats.worstTrade = pnl;
-        }
-      }
-
-      const trade = {
-        ...position,
-        exitPrice: data.price,
-        closeTime: Date.now(),
-        pnl: pnl,
-        roi: roi,
-        status: 'CLOSED'
-      };
-      user.trades.push(trade);
-    } catch (error) {
-      console.error('Error closing position:', error.message);
-    }
-  }
-
-  user.positions = [];
-
-  await bot.deleteMessage(chatId, loadingMsg.message_id);
-
-  const emoji = totalPnL >= 0 ? '✅' : '❌';
-  const message = `
-${emoji} *ALL POSITIONS CLOSED*
-
-📊 *Closed:* ${closedCount} position(s)
-💰 *Total PnL:* ${formatNumber(totalPnL)}
-💼 *New Balance:* ${formatNumber(user.balance)}
-📈 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%
-  `.trim();
-
-  bot.sendMessage(chatId, message, { 
-    parse_mode: 'Markdown',
-    reply_markup: getMainMenu()
-  });
-}
-
-// Handle errors
-bot.on('polling_error', (error) => {
-  console.error('Polling error:', error.message);
-});
-
-// Auto-check for liquidations every 30 seconds
-setInterval(async () => {
-  for (const [userId, user] of users.entries()) {
-    for (const position of [...user.positions]) {
-      try {
-        const data = await getCoinDetails(position.symbol);
-        
-        if ((position.type === 'LONG' && data.price <= position.liquidationPrice) ||
-            (position.type === 'SHORT' && data.price >= position.liquidationPrice)) {
-          
-          const index = user.positions.indexOf(position);
-          user.positions.splice(index, 1);
-          
-          user.stats.totalTrades++;
-          user.stats.losingTrades++;
-          user.stats.totalLoss -= position.margin;
-          if (-position.margin < user.stats.worstTrade) {
-            user.stats.worstTrade = -position.margin;
-          }
-
-          const trade = {
-            ...position,
-            exitPrice: data.price,
-            closeTime: Date.now(),
-            pnl: -position.margin,
-            roi: -100,
-            status: 'LIQUIDATED'
-          };
-          user.trades.push(trade);
-
-          bot.sendMessage(userId,
-            `💥 *POSITION LIQUIDATED!*\n\n` +
-            `${position.type} ${position.symbol} ${position.leverage}x\n` +
-            `Entry: ${formatNumber(position.entryPrice, 4)}\n` +
-            `Liquidation: ${formatNumber(data.price, 4)}\n` +
-            `Loss: -${formatNumber(position.margin)}\n\n` +
-            `💼 Balance: ${formatNumber(user.balance)}`,
-            { 
-              parse_mode: 'Markdown',
-              reply_markup: getMainMenu()
-            }
-          );
-        }
-      } catch (error) {
-        console.error('Error checking liquidation:', error.message);
-      }
-    }
-  }
-}, 30000);
-
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down bot...');
-  bot.stopPolling();
-  process.exit(0);
-});
+  buttons.push([{ text: '🔙 Back to Menu', callback_data: 'menu
