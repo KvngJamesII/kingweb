@@ -1,7 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-const { createCanvas } = require('canvas');
-const fs = require('fs');
 
 // Telegram Bot Token
 const token = '8349196950:AAF6EOlBTaGFEknR-xiY106GZMPRd0dh2HA';
@@ -86,87 +84,41 @@ const formatNumber = (num, decimals = 2) => {
   return parseFloat(num).toFixed(decimals);
 };
 
-// Generate trade result image
-async function generateTradeImage(trade, pnl, roi) {
-  const width = 800;
-  const height = 600;
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-
-  // Background gradient
+// Generate text-based trade summary (instead of image)
+function generateTradeSummary(trade, pnl, roi) {
   const isProfit = pnl >= 0;
-  const gradient = ctx.createLinearGradient(0, 0, 0, height);
-  if (isProfit) {
-    gradient.addColorStop(0, '#0f2027');
-    gradient.addColorStop(0.5, '#203a43');
-    gradient.addColorStop(1, '#2c5364');
-  } else {
-    gradient.addColorStop(0, '#1a0000');
-    gradient.addColorStop(0.5, '#2d0a0a');
-    gradient.addColorStop(1, '#400a0a');
-  }
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-
-  // Title
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 48px Arial';
-  ctx.textAlign = 'center';
-  ctx.fillText('POSITION CLOSED', width / 2, 70);
-
-  // Result banner
-  ctx.fillStyle = isProfit ? '#00ff88' : '#ff3366';
-  ctx.fillRect(50, 100, width - 100, 120);
-  
-  ctx.fillStyle = '#000000';
-  ctx.font = 'bold 72px Arial';
-  const resultText = isProfit ? 'PROFIT' : 'LOSS';
-  const resultEmoji = isProfit ? '🚀' : '💥';
-  ctx.fillText(`${resultEmoji} ${resultText} ${resultEmoji}`, width / 2, 180);
-
-  // PnL Amount
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 56px Arial';
-  const sign = pnl >= 0 ? '+' : '';
-  ctx.fillText(`${sign}$${formatNumber(Math.abs(pnl))}`, width / 2, 260);
-
-  // ROI
-  ctx.font = 'bold 42px Arial';
-  ctx.fillText(`ROI: ${sign}${formatNumber(roi)}%`, width / 2, 320);
-
-  // Trade Details Box
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-  ctx.fillRect(50, 350, width - 100, 200);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '28px Arial';
-  ctx.textAlign = 'left';
-  
-  const leftX = 80;
-  const rightX = width / 2 + 50;
-  let y = 390;
-  const lineHeight = 40;
-
-  // Left column
-  ctx.fillText(`Symbol: ${trade.symbol}`, leftX, y);
-  ctx.fillText(`Type: ${trade.type}`, leftX, y + lineHeight);
-  ctx.fillText(`Entry: $${formatNumber(trade.entryPrice)}`, leftX, y + lineHeight * 2);
-  ctx.fillText(`Amount: ${formatNumber(trade.amount, 4)}`, leftX, y + lineHeight * 3);
-
-  // Right column
-  ctx.fillText(`Leverage: ${trade.leverage}x`, rightX, y);
-  ctx.fillText(`Exit: $${formatNumber(trade.exitPrice)}`, rightX, y + lineHeight);
-  ctx.fillText(`Margin: $${formatNumber(trade.margin)}`, rightX, y + lineHeight * 2);
-  
   const duration = Math.floor((trade.closeTime - trade.openTime) / 1000 / 60);
-  ctx.fillText(`Duration: ${duration}m`, rightX, y + lineHeight * 3);
-
-  // Save image
-  const filename = `trade_${Date.now()}.png`;
-  const buffer = canvas.toBuffer('image/png');
-  fs.writeFileSync(filename, buffer);
   
-  return filename;
+  const border = isProfit ? '🟢' : '🔴';
+  const result = isProfit ? '✅ PROFIT' : '❌ LOSS';
+  const sign = pnl >= 0 ? '+' : '';
+  
+  return `
+${border.repeat(20)}
+
+${result}
+${sign}$${formatNumber(Math.abs(pnl))} (${sign}${formatNumber(roi)}%)
+
+${border.repeat(20)}
+
+📊 TRADE DETAILS
+
+🪙 Symbol: ${trade.symbol}
+${trade.type === 'LONG' ? '📈' : '📉'} Type: ${trade.type}
+⚡ Leverage: ${trade.leverage}x
+
+💰 Entry Price: $${formatNumber(trade.entryPrice)}
+🎯 Exit Price: $${formatNumber(trade.exitPrice)}
+📊 Price Change: ${formatNumber(((trade.exitPrice - trade.entryPrice) / trade.entryPrice) * 100)}%
+
+💵 Position Size: ${formatNumber(trade.amount, 6)} ${trade.symbol.replace('USDT', '')}
+🔒 Margin Used: $${formatNumber(trade.margin)}
+
+⏱ Duration: ${duration} minutes
+📅 Closed: ${new Date(trade.closeTime).toLocaleString()}
+
+${border.repeat(20)}
+  `.trim();
 }
 
 // Command: /start
@@ -194,13 +146,14 @@ Practice futures trading with $${INITIAL_BALANCE} demo funds!
 /closeall - Close all positions
 /history - View trade history
 /reset - Reset account
+/leaderboard - Top traders (coming soon!)
 
 *💡 Features:*
 • Real-time Binance prices
 • Leverage up to ${MAX_LEVERAGE}x
 • Automatic liquidation
 • PnL tracking
-• Trade history with images
+• Detailed trade summaries
 • Win rate statistics
 
 Start trading now! 🚀
@@ -219,6 +172,7 @@ bot.onText(/\/balance/, (msg) => {
   const winRate = user.stats.totalTrades > 0 
     ? (user.stats.winningTrades / user.stats.totalTrades * 100).toFixed(2)
     : 0;
+  const netPnL = user.stats.totalProfit + user.stats.totalLoss;
 
   const message = `
 💼 *PORTFOLIO SUMMARY*
@@ -226,8 +180,12 @@ bot.onText(/\/balance/, (msg) => {
 💰 *Total Balance:* $${formatNumber(user.balance)}
 💵 *Available:* $${formatNumber(availableBalance)}
 🔒 *In Positions:* $${formatNumber(totalMargin)}
+${netPnL >= 0 ? '📈' : '📉'} *Net PnL:* $${formatNumber(netPnL)}
 
-📊 *TRADING STATS*
+━━━━━━━━━━━━━━━━━━━━━
+
+📊 *TRADING STATISTICS*
+
 📈 *Total Trades:* ${user.stats.totalTrades}
 ✅ *Winning:* ${user.stats.winningTrades}
 ❌ *Losing:* ${user.stats.losingTrades}
@@ -276,7 +234,7 @@ bot.onText(/\/long (.+)/, async (msg, match) => {
   try {
     const user = initUser(chatId);
     const priceData = await getCurrentPrice(coin);
-    const margin = amount; // The amount IS the margin (collateral)
+    const margin = amount;
     const positionSize = amount * leverage;
 
     if (margin > user.balance) {
@@ -295,7 +253,7 @@ bot.onText(/\/long (.+)/, async (msg, match) => {
       symbol: priceData.symbol,
       type: 'LONG',
       entryPrice: priceData.price,
-      amount: positionSize / priceData.price, // Amount in coins
+      amount: positionSize / priceData.price,
       margin: margin,
       leverage: leverage,
       liquidationPrice: liquidationPrice,
@@ -475,7 +433,7 @@ bot.onText(/\/positions/, async (msg) => {
   }
 
   const totalEmoji = totalPnL >= 0 ? '💚' : '❤️';
-  message += `${totalEmoji} *Total Unrealized PnL: $${formatNumber(totalPnL)}*\n\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━\n${totalEmoji} *Total Unrealized PnL: $${formatNumber(totalPnL)}*\n\n`;
   message += `Use /close <id> to close a position`;
 
   bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -536,22 +494,16 @@ bot.onText(/\/close (.+)/, async (msg, match) => {
 
     await bot.deleteMessage(chatId, loadingMsg.message_id);
 
-    // Generate image
-    const imagePath = await generateTradeImage(trade, pnl, roi);
+    // Generate text summary
+    const summary = generateTradeSummary(trade, pnl, roi);
 
-    // Send image
-    await bot.sendPhoto(chatId, imagePath, {
-      caption: `
-${pnl >= 0 ? '✅' : '❌'} *POSITION CLOSED*
-
-💼 *New Balance:* $${formatNumber(user.balance)}
-📊 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%
-      `.trim(),
-      parse_mode: 'Markdown'
-    });
-
-    // Delete image file
-    fs.unlinkSync(imagePath);
+    // Send summary with updated balance
+    await bot.sendMessage(chatId, 
+      `\`\`\`\n${summary}\n\`\`\`\n` +
+      `💼 *New Balance:* $${formatNumber(user.balance)}\n` +
+      `📊 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%`,
+      { parse_mode: 'Markdown' }
+    );
 
   } catch (error) {
     bot.sendMessage(chatId, `❌ Error: ${error.message}`);
@@ -621,6 +573,7 @@ ${emoji} *ALL POSITIONS CLOSED*
 📊 *Closed:* ${closedCount} position(s)
 💰 *Total PnL:* $${formatNumber(totalPnL)}
 💼 *New Balance:* $${formatNumber(user.balance)}
+📈 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%
   `.trim();
 
   bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -645,7 +598,8 @@ bot.onText(/\/history/, (msg) => {
     
     message += `${emoji} ${typeEmoji} *${trade.symbol} ${trade.leverage}x*\n`;
     message += `   Entry: $${formatNumber(trade.entryPrice)} → Exit: $${formatNumber(trade.exitPrice)}\n`;
-    message += `   PnL: $${formatNumber(trade.pnl)} (${formatNumber(trade.roi)}%)\n\n`;
+    message += `   PnL: $${formatNumber(trade.pnl)} (${formatNumber(trade.roi)}%)\n`;
+    message += `   ${trade.status}\n\n`;
   });
 
   bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
