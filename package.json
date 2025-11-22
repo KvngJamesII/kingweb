@@ -1,0 +1,26 @@
+{
+  "name": "futures-demo-trading-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for demo futures trading with real market data",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "crypto",
+    "futures",
+    "demo",
+    "trading",
+    "paper-trading"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "axios": "^1.6.2",
+    "canvas": "^2.11.2"
+  }
+}
