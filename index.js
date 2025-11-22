@@ -782,4 +782,767 @@ async function showPositions(chatId, messageId = null, isEdit = false) {
     { text: '📊 Set TP/SL', callback_data: 'set_tpsl' },
     { text: '📈 Add Position', callback_data: 'add_position' }
   ]);
-  buttons.push([{ text: '🔙 Back to Menu', callback_data: 'menu
+  buttons.push([{ text: '🔙 Back to Menu', callback_data: 'menu' }]);
+
+  if (messageId && isEdit) {
+    try {
+      bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: buttons }
+      });
+    } catch (error) {
+      if (error && error.message && !error.message.includes('message is not modified')) {
+        console.error('Error editing message:', error.message);
+      }
+    }
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    });
+  }
+}
+
+// Show balance
+async function showBalance(chatId, messageId = null, isEdit = false) {
+  const user = initUser(chatId);
+  
+  const totalMargin = user.positions.reduce((sum, p) => sum + p.margin, 0);
+  const availableBalance = user.balance - totalMargin;
+  
+  const winRate = user.stats.totalTrades > 0 
+    ? (user.stats.winningTrades / user.stats.totalTrades * 100).toFixed(2)
+    : 0;
+  
+  const netPnL = user.stats.totalProfit + user.stats.totalLoss;
+  const roi = ((netPnL / INITIAL_BALANCE) * 100).toFixed(2);
+
+  let unrealizedPnL = 0;
+  for (const position of user.positions) {
+    try {
+      const data = await getCoinDetails(position.symbol);
+      const { pnl } = calculatePnL(position, data.price);
+      unrealizedPnL += pnl;
+    } catch (error) {
+      console.error('Error calculating unrealized PnL:', error.message);
+    }
+  }
+
+  const totalEquity = user.balance + unrealizedPnL;
+  const now = new Date();
+  
+  const message = `
+💼 *PORTFOLIO SUMMARY*
+🕐 Updated: ${now.toLocaleTimeString()}
+
+💰 *Total Equity:* ${formatNumber(totalEquity)}
+💵 *Available:* ${formatNumber(availableBalance)}
+🔒 *In Positions:* ${formatNumber(totalMargin)}
+${unrealizedPnL >= 0 ? '📈' : '📉'} *Unrealized PnL:* ${formatNumber(unrealizedPnL)}
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 *TRADING STATISTICS*
+
+${netPnL >= 0 ? '📈' : '📉'} *Net PnL:* ${formatNumber(netPnL)} (${roi >= 0 ? '+' : ''}${roi}%)
+📈 *Total Trades:* ${user.stats.totalTrades}
+✅ *Winning:* ${user.stats.winningTrades}
+❌ *Losing:* ${user.stats.losingTrades}
+🎯 *Win Rate:* ${winRate}%
+
+💚 *Total Profit:* ${formatNumber(user.stats.totalProfit)}
+❤️ *Total Loss:* ${formatNumber(Math.abs(user.stats.totalLoss))}
+🏆 *Best Trade:* ${formatNumber(user.stats.bestTrade)}
+💔 *Worst Trade:* ${formatNumber(user.stats.worstTrade)}
+
+🔢 *Open Positions:* ${user.positions.length}
+  `.trim();
+
+  const buttons = [
+    [
+      { text: '🔄 Refresh', callback_data: 'refresh_balance' },
+      { text: '📊 Analysis', callback_data: 'analysis' }
+    ],
+    [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+  ];
+
+  if (messageId && isEdit) {
+    try {
+      bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: buttons }
+      });
+    } catch (error) {
+      if (error && error.message && !error.message.includes('message is not modified')) {
+        console.error('Error editing message:', error.message);
+      }
+    }
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    });
+  }
+}
+
+// Get performance rating
+function getPerformanceRating(winRate, profitFactor, roi) {
+  let rating = '';
+  if (winRate >= 60 && profitFactor >= 2 && parseFloat(roi) > 50) {
+    rating = '🌟🌟🌟🌟🌟 Exceptional!';
+  } else if (winRate >= 55 && profitFactor >= 1.5 && parseFloat(roi) > 30) {
+    rating = '⭐⭐⭐⭐ Excellent!';
+  } else if (winRate >= 50 && profitFactor >= 1.2 && parseFloat(roi) > 10) {
+    rating = '⭐⭐⭐ Good!';
+  } else if (winRate >= 45 && profitFactor >= 1 && parseFloat(roi) > 0) {
+    rating = '⭐⭐ Developing';
+  } else {
+    rating = '⭐ Keep Learning';
+  }
+  return rating;
+}
+
+// Show analysis
+async function showAnalysis(chatId, messageId = null, isEdit = false) {
+  const user = initUser(chatId);
+  
+  if (user.trades.length === 0) {
+    const msg = '📊 No trading data yet to analyze.\n\nStart trading to see your performance!';
+    if (messageId && isEdit) {
+      try {
+        bot.editMessageText(msg, {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: getMainMenu()
+        });
+      } catch (error) {
+        console.error('Error editing message:', error.message);
+      }
+    } else {
+      bot.sendMessage(chatId, msg, {
+        reply_markup: getMainMenu()
+      });
+    }
+    return;
+  }
+
+  const totalTrades = user.stats.totalTrades;
+  const winRate = (user.stats.winningTrades / totalTrades * 100).toFixed(2);
+  const avgProfit = user.stats.winningTrades > 0 ? (user.stats.totalProfit / user.stats.winningTrades) : 0;
+  const avgLoss = user.stats.losingTrades > 0 ? (user.stats.totalLoss / user.stats.losingTrades) : 0;
+  const profitFactor = user.stats.totalLoss !== 0 ? Math.abs(user.stats.totalProfit / user.stats.totalLoss) : 0;
+  
+  const netPnL = user.stats.totalProfit + user.stats.totalLoss;
+  const roi = ((netPnL / INITIAL_BALANCE) * 100).toFixed(2);
+
+  let unrealizedPnL = 0;
+  for (const position of user.positions) {
+    try {
+      const data = await getCoinDetails(position.symbol);
+      const { pnl } = calculatePnL(position, data.price);
+      unrealizedPnL += pnl;
+    } catch (error) {
+      console.error('Error calculating unrealized PnL:', error.message);
+    }
+  }
+
+  const totalEquity = user.balance + unrealizedPnL;
+
+  let currentStreak = 0;
+  let maxWinStreak = 0;
+  let maxLossStreak = 0;
+  let tempWinStreak = 0;
+  let tempLossStreak = 0;
+
+  for (const trade of user.trades.slice().reverse()) {
+    if (trade.pnl >= 0) {
+      tempWinStreak++;
+      tempLossStreak = 0;
+      if (tempWinStreak > maxWinStreak) maxWinStreak = tempWinStreak;
+    } else {
+      tempLossStreak++;
+      tempWinStreak = 0;
+      if (tempLossStreak > maxLossStreak) maxLossStreak = tempLossStreak;
+    }
+  }
+
+  const lastTrade = user.trades[user.trades.length - 1];
+  currentStreak = lastTrade.pnl >= 0 ? tempWinStreak : -tempLossStreak;
+
+  const avgRR = avgLoss !== 0 ? (avgProfit / Math.abs(avgLoss)) : 0;
+
+  let peak = INITIAL_BALANCE;
+  let maxDrawdown = 0;
+  let currentBalance = INITIAL_BALANCE;
+
+  for (const trade of user.trades) {
+    currentBalance += trade.pnl;
+    if (currentBalance > peak) {
+      peak = currentBalance;
+    }
+    const drawdown = ((peak - currentBalance) / peak) * 100;
+    if (drawdown > maxDrawdown) {
+      maxDrawdown = drawdown;
+    }
+  }
+
+  const now = new Date();
+  const message = `
+📈 *TRADING ANALYSIS*
+🕐 Updated: ${now.toLocaleTimeString()}
+
+💼 *Account Performance*
+Starting Balance: ${INITIAL_BALANCE}
+Current Equity: ${formatNumber(totalEquity)}
+Realized PnL: ${formatNumber(netPnL)}
+Unrealized PnL: ${formatNumber(unrealizedPnL)}
+Total ROI: ${roi >= 0 ? '+' : ''}${roi}%
+Max Drawdown: ${formatNumber(maxDrawdown)}%
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 *Trading Metrics*
+
+🎯 Win Rate: ${winRate}%
+📈 Total Trades: ${totalTrades}
+✅ Winning Trades: ${user.stats.winningTrades}
+❌ Losing Trades: ${user.stats.losingTrades}
+
+💰 Profit Factor: ${formatNumber(profitFactor)}
+💚 Avg Profit: ${formatNumber(avgProfit)}
+❤️ Avg Loss: ${formatNumber(avgLoss)}
+⚖️ Risk/Reward: ${formatNumber(avgRR)}
+
+🏆 Best Trade: ${formatNumber(user.stats.bestTrade)}
+💔 Worst Trade: ${formatNumber(user.stats.worstTrade)}
+
+━━━━━━━━━━━━━━━━━━━━━
+🔥 *Streaks*
+
+Current: ${currentStreak >= 0 ? '🟢' : '🔴'} ${Math.abs(currentStreak)} ${currentStreak >= 0 ? 'wins' : 'losses'}
+Best Win Streak: ${maxWinStreak}
+Worst Loss Streak: ${maxLossStreak}
+
+━━━━━━━━━━━━━━━━━━━━━
+💡 *Performance Rating*
+${getPerformanceRating(winRate, profitFactor, roi)}
+  `.trim();
+
+  const buttons = [
+    [
+      { text: '🔄 Refresh', callback_data: 'refresh_analysis' },
+      { text: '📊 Positions', callback_data: 'positions' }
+    ],
+    [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+  ];
+
+  if (messageId && isEdit) {
+    try {
+      bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: buttons }
+      });
+    } catch (error) {
+      if (error && error.message && !error.message.includes('message is not modified')) {
+        console.error('Error editing message:', error.message);
+      }
+    }
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    });
+  }
+}
+
+// Show history
+async function showHistory(chatId, messageId = null) {
+  const user = initUser(chatId);
+  
+  if (user.trades.length === 0) {
+    const msg = '📭 No trade history yet.\n\nStart trading with /trade <COIN>!';
+    if (messageId) {
+      bot.editMessageText(msg, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: getMainMenu()
+      });
+    } else {
+      bot.sendMessage(chatId, msg, {
+        reply_markup: getMainMenu()
+      });
+    }
+    return;
+  }
+
+  const recentTrades = user.trades.slice(-10).reverse();
+  let message = '📜 *TRADE HISTORY* (Last 10)\n\n';
+
+  recentTrades.forEach((trade) => {
+    const emoji = trade.pnl >= 0 ? '✅' : '❌';
+    const typeEmoji = trade.type === 'LONG' ? '🟢' : '🔴';
+    
+    message += `${emoji} ${typeEmoji} *${trade.symbol} ${trade.leverage}x*\n`;
+    message += `   Entry: ${formatNumber(trade.entryPrice, 4)} → Exit: ${formatNumber(trade.exitPrice, 4)}\n`;
+    message += `   PnL: ${formatNumber(trade.pnl)} (${formatNumber(trade.roi)}%)\n`;
+    message += `   ${trade.status}\n\n`;
+  });
+
+  if (messageId) {
+    bot.editMessageText(message, { 
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  }
+}
+
+// Show leaderboard
+async function showLeaderboard(chatId, messageId = null) {
+  const leaderboardData = [];
+  
+  for (const [userId, userData] of users.entries()) {
+    const netPnL = userData.stats.totalProfit + userData.stats.totalLoss;
+    const roi = ((netPnL / INITIAL_BALANCE) * 100).toFixed(2);
+    const winRate = userData.stats.totalTrades > 0 
+      ? (userData.stats.winningTrades / userData.stats.totalTrades * 100).toFixed(2)
+      : 0;
+    
+    leaderboardData.push({
+      userId,
+      balance: userData.balance,
+      netPnL,
+      roi,
+      winRate,
+      totalTrades: userData.stats.totalTrades
+    });
+  }
+
+  leaderboardData.sort((a, b) => b.netPnL - a.netPnL);
+
+  let message = '🏆 *LEADERBOARD - Top Traders*\n\n';
+
+  if (leaderboardData.length === 0) {
+    message += 'No traders yet. Be the first! 🚀';
+  } else {
+    leaderboardData.slice(0, 10).forEach((trader, index) => {
+      const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      const isCurrentUser = trader.userId === chatId;
+      const highlight = isCurrentUser ? '👉 ' : '';
+      
+      message += `${highlight}${medal} User ${trader.userId.toString().slice(-4)}\n`;
+      message += `   💰 Balance: ${formatNumber(trader.balance)}\n`;
+      message += `   📈 PnL: ${formatNumber(trader.netPnL)} (${trader.roi >= 0 ? '+' : ''}${trader.roi}%)\n`;
+      message += `   🎯 Win Rate: ${trader.winRate}%\n`;
+      message += `   📊 Trades: ${trader.totalTrades}\n\n`;
+    });
+
+    const userRank = leaderboardData.findIndex(t => t.userId === chatId);
+    if (userRank >= 10) {
+      const userData = leaderboardData[userRank];
+      message += `━━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `👉 Your Rank: #${userRank + 1}\n`;
+      message += `   💰 Balance: ${formatNumber(userData.balance)}\n`;
+      message += `   📈 PnL: ${formatNumber(userData.netPnL)} (${userData.roi >= 0 ? '+' : ''}${userData.roi}%)\n`;
+    }
+  }
+
+  if (messageId) {
+    bot.editMessageText(message, { 
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  }
+}
+
+// Show settings
+async function showSettings(chatId, messageId = null) {
+  const message = `
+⚙️ *SETTINGS*
+
+Manage your trading account and preferences.
+  `.trim();
+
+  if (messageId) {
+    bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🔄 Reset Account', callback_data: 'reset_confirm' }
+          ],
+          [
+            { text: '🔙 Back to Menu', callback_data: 'menu' }
+          ]
+        ]
+      }
+    });
+  } else {
+    bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🔄 Reset Account', callback_data: 'reset_confirm' }
+          ],
+          [
+            { text: '🔙 Back to Menu', callback_data: 'menu' }
+          ]
+        ]
+      }
+    });
+  }
+}
+
+// Show help
+async function showHelp(chatId, messageId = null) {
+  const message = `
+❓ *HELP & COMMANDS*
+
+*🔍 Quick Commands:*
+/p <COIN> - View coin details & trade
+/trade <COIN> - Open trade directly
+/menu - Show main menu
+
+*💡 Examples:*
+/p BTC
+/trade ETH
+/p SOL
+
+*📊 Menu Options:*
+• *Positions* - View & manage open positions
+• *Balance* - View portfolio & stats
+• *Analysis* - Detailed performance metrics
+• *History* - View past trades
+• *Leaderboard* - Top traders ranking
+• *Settings* - Account management
+
+*🎯 How to Trade:*
+1. Use /p <COIN> or /trade <COIN>
+2. Select LONG or SHORT
+3. Choose your margin amount
+4. Select leverage (1-${MAX_LEVERAGE}x)
+5. Confirm and trade!
+
+*⚠️ Risk Management:*
+• Higher leverage = Higher risk
+• Always monitor liquidation price
+• Start with lower leverage
+• Practice risk management
+
+*💡 Tips:*
+• Check 24h change before trading
+• Set realistic profit targets
+• Don't risk more than you can afford
+• Use the analysis tool to improve
+
+Need more help? Contact support! 📧
+  `.trim();
+
+  if (messageId) {
+    bot.editMessageText(message, { 
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  }
+}
+
+// Close position - MODIFIED to edit message
+async function closePosition(chatId, positionId, messageId = null) {
+  const user = initUser(chatId);
+  const position = user.positions.find(p => p.id === positionId);
+  
+  if (!position) {
+    const msg = '❌ Position not found or already closed.';
+    if (messageId) {
+      bot.editMessageText(msg, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: getMainMenu()
+      });
+    } else {
+      bot.sendMessage(chatId, msg, {
+        reply_markup: getMainMenu()
+      });
+    }
+    return;
+  }
+
+  try {
+    if (messageId) {
+      await bot.editMessageText('⏳ Closing position...', {
+        chat_id: chatId,
+        message_id: messageId
+      });
+    }
+    
+    const data = await getCoinDetails(position.symbol);
+    const { pnl, roi } = calculatePnL(position, data.price);
+
+    user.balance += position.margin + pnl;
+
+    user.stats.totalTrades++;
+    if (pnl >= 0) {
+      user.stats.winningTrades++;
+      user.stats.totalProfit += pnl;
+      if (pnl > user.stats.bestTrade) {
+        user.stats.bestTrade = pnl;
+      }
+    } else {
+      user.stats.losingTrades++;
+      user.stats.totalLoss += pnl;
+      if (pnl < user.stats.worstTrade) {
+        user.stats.worstTrade = pnl;
+      }
+    }
+
+    const trade = {
+      ...position,
+      exitPrice: data.price,
+      closeTime: Date.now(),
+      pnl: pnl,
+      roi: roi,
+      status: 'CLOSED'
+    };
+
+    user.trades.push(trade);
+
+    const index = user.positions.indexOf(position);
+    user.positions.splice(index, 1);
+
+    const isProfit = pnl >= 0;
+    const border = isProfit ? '🟢' : '🔴';
+    const result = isProfit ? '✅ PROFIT' : '❌ LOSS';
+    const sign = pnl >= 0 ? '+' : '';
+    const duration = Math.floor((trade.closeTime - trade.openTime) / 1000 / 60);
+    
+    const summary = `
+${border.repeat(20)}
+${result}
+${sign}${formatNumber(Math.abs(pnl))} (${sign}${formatNumber(roi)}%)
+${border.repeat(20)}
+
+📊 TRADE DETAILS
+
+🪙 Symbol: ${trade.symbol}
+${trade.type === 'LONG' ? '📈' : '📉'} Type: ${trade.type}
+⚡ Leverage: ${trade.leverage}x
+
+💰 Entry Price: ${formatNumber(trade.entryPrice, 4)}
+🎯 Exit Price: ${formatNumber(trade.exitPrice, 4)}
+📊 Price Change: ${formatNumber(((trade.exitPrice - trade.entryPrice) / trade.entryPrice) * 100)}%
+
+💵 Position Size: ${formatNumber(trade.amount, 6)}
+🔒 Margin Used: ${formatNumber(trade.margin)}
+⏱ Duration: ${duration} minutes
+
+${border.repeat(20)}
+    `.trim();
+
+    const resultMessage = `\`\`\`\n${summary}\n\`\`\`\n` +
+      `💼 *New Balance:* ${formatNumber(user.balance)}\n` +
+      `📊 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%`;
+
+    if (messageId) {
+      await bot.editMessageText(resultMessage, { 
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: getMainMenu()
+      });
+    } else {
+      await bot.sendMessage(chatId, resultMessage, { 
+        parse_mode: 'Markdown',
+        reply_markup: getMainMenu()
+      });
+    }
+  } catch (error) {
+    bot.sendMessage(chatId, `❌ Error: ${error.message}`, {
+      reply_markup: getMainMenu()
+    });
+  }
+}
+
+// Close all positions - MODIFIED to edit message
+async function closeAllPositions(chatId, messageId = null) {
+  const user = initUser(chatId);
+  
+  if (user.positions.length === 0) {
+    const msg = '📭 No open positions to close.';
+    if (messageId) {
+      bot.editMessageText(msg, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: getMainMenu()
+      });
+    } else {
+      bot.sendMessage(chatId, msg, {
+        reply_markup: getMainMenu()
+      });
+    }
+    return;
+  }
+
+  if (messageId) {
+    await bot.editMessageText('⏳ Closing all positions...', {
+      chat_id: chatId,
+      message_id: messageId
+    });
+  }
+  
+  let totalPnL = 0;
+  const closedCount = user.positions.length;
+
+  for (const position of [...user.positions]) {
+    try {
+      const data = await getCoinDetails(position.symbol);
+      const { pnl, roi } = calculatePnL(position, data.price);
+      
+      totalPnL += pnl;
+      user.balance += position.margin + pnl;
+
+      user.stats.totalTrades++;
+      if (pnl >= 0) {
+        user.stats.winningTrades++;
+        user.stats.totalProfit += pnl;
+        if (pnl > user.stats.bestTrade) {
+          user.stats.bestTrade = pnl;
+        }
+      } else {
+        user.stats.losingTrades++;
+        user.stats.totalLoss += pnl;
+        if (pnl < user.stats.worstTrade) {
+          user.stats.worstTrade = pnl;
+        }
+      }
+
+      const trade = {
+        ...position,
+        exitPrice: data.price,
+        closeTime: Date.now(),
+        pnl: pnl,
+        roi: roi,
+        status: 'CLOSED'
+      };
+
+      user.trades.push(trade);
+    } catch (error) {
+      console.error('Error closing position:', error.message);
+    }
+  }
+
+  user.positions = [];
+
+  const emoji = totalPnL >= 0 ? '✅' : '❌';
+  const message = `
+${emoji} *ALL POSITIONS CLOSED*
+
+📊 *Closed:* ${closedCount} position(s)
+💰 *Total PnL:* ${formatNumber(totalPnL)}
+
+💼 *New Balance:* ${formatNumber(user.balance)}
+📈 *Win Rate:* ${user.stats.totalTrades > 0 ? ((user.stats.winningTrades / user.stats.totalTrades) * 100).toFixed(2) : 0}%
+  `.trim();
+
+  if (messageId) {
+    bot.editMessageText(message, { 
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: getMainMenu()
+    });
+  }
+}
+
+// Handle errors
+bot.on('polling_error', (error) => {
+  console.error('Polling error:', error.message);
+});
+
+// Auto-check for liquidations every 30 seconds
+setInterval(async () => {
+  for (const [userId, user] of users.entries()) {
+    for (const position of [...user.positions]) {
+      try {
+        const data = await getCoinDetails(position.symbol);
+        
+        if ((position.type === 'LONG' && data.price <= position.liquidationPrice) ||
+            (position.type === 'SHORT' && data.price >= position.liquidationPrice)) {
+          
+          const index = user.positions.indexOf(position);
+          user.positions.splice(index, 1);
+          
+          user.stats.totalTrades++;
+          user.stats.losingTrades++;
+          user.stats.totalLoss -= position.margin;
+          if (-position.margin < user.stats.worstTrade) {
+            user.stats.worstTrade = -position.margin;
+          }
+
+          const trade = {
+            ...position,
+            exitPrice: data.price,
+            closeTime: Date.now(),
+            pnl: -position.margin,
+            roi: -100,
+            status: 'LIQUIDATED'
+          };
+
+          user.trades.push(trade);
+
+          bot.sendMessage(userId,
+            `💥 *POSITION LIQUIDATED!*\n\n` +
+            `${position.type} ${position.symbol} ${position.leverage}x\n` +
+            `Entry: ${formatNumber(position.entryPrice, 4)}\n` +
+            `Liquidation: ${formatNumber(data.price, 4)}\n` +
+            `Loss: -${formatNumber(position.margin)}\n\n` +
+            `💼 Balance: ${formatNumber(user.balance)}`,
+            { 
+              parse_mode: 'Markdown',
+              reply_markup: getMainMenu()
+            }
+          );
+        }
+      } catch (error) {
+        console.error('Error checking liquidation:', error.message);
+      }
+    }
+  }
+}, 30000);
+
+process.on('SIGINT', () => {
+  console.log('\n🛑 Shutting down bot...');
+  bot.stopPolling();
+  process.exit(0);
+});
