@@ -771,8 +771,36 @@ bot.on('callback_query', async (query) => {
       case 'positions':
         await showPositions(chatId);
         break;
+      case 'refresh_positions':
+        await showPositions(chatId, messageId, true);
+        break;
+      case 'add_position':
+        bot.sendMessage(chatId, 
+          '🎯 *Open New Position*\n\n' +
+          'Use /trade <COIN> to open a new position!\n\n' +
+          'Example: /trade BTC',
+          { 
+            parse_mode: 'Markdown',
+            reply_markup: getMainMenu() 
+          }
+        );
+        break;
+      case 'set_tpsl':
+        bot.sendMessage(chatId, 
+          '📊 *Take Profit / Stop Loss*\n\n' +
+          '🚧 Feature coming soon!\n\n' +
+          'You\'ll be able to set automatic TP/SL levels for your positions.',
+          { 
+            parse_mode: 'Markdown',
+            reply_markup: getMainMenu() 
+          }
+        );
+        break;
       case 'balance':
         await showBalance(chatId);
+        break;
+      case 'refresh_balance':
+        await showBalance(chatId, messageId, true);
         break;
       case 'analysis':
         await showAnalysis(chatId);
@@ -1057,18 +1085,29 @@ bot.on('message', async (msg) => {
 });
 
 // Show positions
-async function showPositions(chatId) {
+async function showPositions(chatId, messageId = null, isRefresh = false) {
   const user = initUser(chatId);
 
   if (user.positions.length === 0) {
-    bot.sendMessage(chatId, '📭 No open positions.\n\nUse /trade <COIN> to open a position!', {
-      reply_markup: getMainMenu()
-    });
+    const msg = '📭 No open positions.\n\nUse /trade <COIN> to open a position!';
+    if (messageId && isRefresh) {
+      bot.editMessageText(msg, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: getMainMenu()
+      });
+    } else {
+      bot.sendMessage(chatId, msg, {
+        reply_markup: getMainMenu()
+      });
+    }
     return;
   }
 
-  let message = '📊 *OPEN POSITIONS*\n\n';
+  const now = new Date();
+  let message = `📊 *OPEN POSITIONS*\n🕐 Updated: ${now.toLocaleTimeString()}\n\n`;
   let totalPnL = 0;
+  let totalInvested = 0;
   const buttons = [];
 
   for (const position of user.positions) {
@@ -1076,18 +1115,29 @@ async function showPositions(chatId) {
       const data = await getCoinDetails(position.symbol);
       const { pnl, roi } = calculatePnL(position, data.price);
       totalPnL += pnl;
+      totalInvested += position.margin;
 
       const pnlEmoji = pnl >= 0 ? '📈' : '📉';
       const typeEmoji = position.type === 'LONG' ? '🟢' : '🔴';
+      
+      // Calculate distance to liquidation
+      const distanceToLiq = position.type === 'LONG' 
+        ? ((data.price - position.liquidationPrice) / data.price * 100)
+        : ((position.liquidationPrice - data.price) / data.price * 100);
+      const liqWarning = distanceToLiq < 5 ? '⚠️ ' : '';
+
+      // Calculate time in position
+      const timeInPosition = Math.floor((Date.now() - position.openTime) / 1000 / 60);
+      const timeStr = timeInPosition < 60 ? `${timeInPosition}m` : `${Math.floor(timeInPosition / 60)}h ${timeInPosition % 60}m`;
 
       message += `${typeEmoji} *${position.type} ${position.symbol}* ${position.leverage}x\n`;
-      message += `💰 Entry: $${formatNumber(position.entryPrice, 4)}\n`;
-      message += `📊 Current: $${formatNumber(data.price, 4)}\n`;
-      message += `${pnlEmoji} PnL: $${formatNumber(pnl)} (${formatNumber(roi)}%)\n`;
-      message += `⚠️ Liq: $${formatNumber(position.liquidationPrice, 4)}\n\n`;
+      message += `💰 Entry: ${formatNumber(position.entryPrice, 4)} | Current: ${formatNumber(data.price, 4)}\n`;
+      message += `${pnlEmoji} PnL: ${formatNumber(pnl)} (${formatNumber(roi)}%)\n`;
+      message += `${liqWarning}⚠️ Liq: ${formatNumber(position.liquidationPrice, 4)} (${formatNumber(distanceToLiq)}%)\n`;
+      message += `⏱ Time: ${timeStr} | 💵 Margin: ${formatNumber(position.margin)}\n\n`;
 
       buttons.push([{ 
-        text: `Close ${position.symbol} ${position.type}`, 
+        text: `${pnl >= 0 ? '✅' : '❌'} Close ${position.symbol} ${position.type} (${formatNumber(roi)}%)`, 
         callback_data: `close_${position.id}` 
       }]);
     } catch (error) {
@@ -1096,17 +1146,48 @@ async function showPositions(chatId) {
   }
 
   const totalEmoji = totalPnL >= 0 ? '💚' : '❤️';
-  message += `━━━━━━━━━━━━━━━━━━━━━\n${totalEmoji} *Total PnL: $${formatNumber(totalPnL)}*`;
+  const totalRoi = totalInvested > 0 ? (totalPnL / totalInvested * 100) : 0;
+  message += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  message += `${totalEmoji} *Total PnL: ${formatNumber(totalPnL)} (${formatNumber(totalRoi)}%)*\n`;
+  message += `📊 Positions: ${user.positions.length} | 💰 Invested: ${formatNumber(totalInvested)}`;
 
+  // Action buttons
+  const actionButtons = [];
   if (user.positions.length > 1) {
-    buttons.push([{ text: '🔴 Close All Positions', callback_data: 'closeall' }]);
+    actionButtons.push({ text: '🔴 Close All', callback_data: 'closeall' });
   }
+  actionButtons.push({ text: '🔄 Refresh', callback_data: 'refresh_positions' });
+  
+  if (actionButtons.length > 0) {
+    buttons.push(actionButtons);
+  }
+  
+  buttons.push([
+    { text: '📊 Set TP/SL', callback_data: 'set_tpsl' },
+    { text: '📈 Add Position', callback_data: 'add_position' }
+  ]);
   buttons.push([{ text: '🔙 Back to Menu', callback_data: 'menu' }]);
 
-  bot.sendMessage(chatId, message, { 
-    parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: buttons }
-  });
+  if (messageId && isRefresh) {
+    try {
+      bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: buttons }
+      });
+    } catch (error) {
+      // If message is the same, ignore error
+      if (!error.message.includes('message is not modified')) {
+        console.error('Error editing message:', error.message);
+      }
+    }
+  } else {
+    bot.sendMessage(chatId, message, { 
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    });
+  }
 }
 
 // Show balance
