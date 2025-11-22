@@ -805,6 +805,9 @@ bot.on('callback_query', async (query) => {
       case 'analysis':
         await showAnalysis(chatId);
         break;
+      case 'refresh_analysis':
+        await showAnalysis(chatId, messageId, true);
+        break;
       case 'history':
         await showHistory(chatId);
         break;
@@ -1170,7 +1173,7 @@ async function showPositions(chatId, messageId = null, isRefresh = false) {
 
   if (messageId && isRefresh) {
     try {
-      bot.editMessageText(message, {
+      await bot.editMessageText(message, {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: 'Markdown',
